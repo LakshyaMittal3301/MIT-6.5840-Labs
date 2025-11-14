@@ -1,10 +1,28 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+)
 
+// 1. Poll the coordinator for tasks.
+
+// Map task:
+// 2. You'll get location of original filename
+// 3. Pass filename and content to map function -> []KeyValue
+// 4. For each pair, hash the key and write the key value pair to a file tmp-taskId-hash
+// 5. Once all writing is done. Change filenames in an atomic operation.
+// 6. Report Coordinator that you are done, along with intermediate file names.
+
+// Reduce task:
+// 2. You'll get the location of all intermediate files.
+// 3. Load all files to a slice of key value pairs.
+// 4. Sort the slice
+// 5. Iterate to find all pairs for a single key, and call the reduce function.
+// 6. Write to a temporary output file, and change its name once writing is done.
+// 7. Report to coordinator that task is done.
 
 //
 // Map functions return a slice of KeyValue.
@@ -35,6 +53,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	CallIsDone()
 
 }
 
@@ -64,6 +83,18 @@ func CallExample() {
 		fmt.Printf("reply.Y %v\n", reply.Y)
 	} else {
 		fmt.Printf("call failed!\n")
+	}
+}
+
+func CallIsDone() {
+	args := GetTaskArgs{}
+	reply := GetTaskReply{}
+
+	ok := call("Coordinator.IsDone", &args, &reply)
+	if ok {
+		fmt.Printf("Status / Task Type: %v\n", reply.Type)
+	} else {
+		fmt.Printf("Call Failed!\n")
 	}
 }
 
