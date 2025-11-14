@@ -49,7 +49,7 @@ type Coordinator struct {
 
 // Your code here -- RPC handlers for the worker to call.
 
-func (c *Coordinator) IsDone(args *GetTaskArgs, reply *GetTaskReply) error {
+func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	reply.Type = TaskTypeIdle
 	return nil
 }

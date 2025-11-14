@@ -47,17 +47,19 @@ func Worker(mapf func(string, string) []KeyValue,
 		reply, ok := pollGetTask()
 
 		if !ok {
-			log.Printf("worker: could not reach coordinator, exiting")
+			log.Printf("worker: could not reach coordinator, exiting\n")
 			return
 		}
 		if reply.Type == TaskTypeExit {
-			log.Printf("worker: got exit task, exiting")
+			log.Printf("worker: got exit task, exiting\n")
 			return
 		}
 
 		err := handleTask(reply, mapf, reducef)
 		if err != nil {
-			log.Printf("worker: error occured while handling task: %v", err.Error())
+			log.Printf("worker: error occured while handling task: %v\n", err)
+			// Should we sleep for some time?
+			time.Sleep(time.Second * 2)
 		}
 	}
 }
@@ -72,6 +74,7 @@ func pollGetTask() (GetTaskReply, bool) {
 			return GetTaskReply{}, ok
 		}
 		if reply.Type == TaskTypeIdle {
+			log.Printf("worker: Idle recieved, sleeping for: %ds\n", idleWait/time.Second)
 			time.Sleep(idleWait)
 		} else {
 			return reply, ok
@@ -79,26 +82,31 @@ func pollGetTask() (GetTaskReply, bool) {
 	}
 }
 
-func handleTask(reply GetTaskReply, mapf func(string, string) []KeyValue, reducef func(string, []string) string) (err error) {
+func handleTask(reply GetTaskReply, mapf func(string, string) []KeyValue, reducef func(string, []string) string) error {
 	switch reply.Type {
-
 	case TaskTypeMap:
-		err = handleMapTask(reply.Map, mapf)
-
+		return handleMapTask(reply.Map, mapf)
 	case TaskTypeReduce:
-		err = handleReduceTask(reply.Reduce, reducef)
-
+		return handleReduceTask(reply.Reduce, reducef)
 	default:
-		err = fmt.Errorf("worker: unexpected task type recieved: %v", reply.Type)
+		return fmt.Errorf("worker: unexpected task type recieved: %v", reply.Type)
 	}
-	return
 }
 
 func handleMapTask(taskInfo *MapTaskInfo, mapf func(string, string) []KeyValue) error {
+	if taskInfo == nil {
+		return fmt.Errorf("worker: no map task information found")
+	}
+	// TODO: Implement Map
+	return nil
 }
 
 func handleReduceTask(taskInfo *ReduceTaskInfo, reducef func(string, []string) string) error {
-
+	if taskInfo == nil {
+		return fmt.Errorf("worker: no reduce task information found")
+	}
+	// TODO: Implement Reduce
+	return nil
 }
 
 func callGetTask(args GetTaskArgs) (GetTaskReply, bool) {
