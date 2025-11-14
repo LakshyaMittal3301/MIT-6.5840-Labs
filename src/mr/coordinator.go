@@ -35,15 +35,15 @@ import (
 type Phase string
 
 const (
-	PhaseMap Phase = "Map"
+	PhaseMap    Phase = "Map"
 	PhaseReduce Phase = "Reduce"
-	PhaseDone Phase = "Done"
+	PhaseDone   Phase = "Done"
 )
 
 type Coordinator struct {
-	Files []string
-	NMap int
-	NReduce int
+	Files        []string
+	NMap         int
+	NReduce      int
 	CurrentPhase Phase
 }
 
@@ -54,20 +54,7 @@ func (c *Coordinator) IsDone(args *GetTaskArgs, reply *GetTaskReply) error {
 	return nil
 }
 
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
-
-
-//
 // start a thread that listens for RPCs from worker.go
-//
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
@@ -81,19 +68,15 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-//
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
-//
 func (c *Coordinator) Done() bool {
 	return c.CurrentPhase == PhaseDone
 }
 
-//
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
-//
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		files, len(files), nReduce, PhaseMap,

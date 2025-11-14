@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"log"
 	"net/rpc"
+	"time"
 )
 
 // 1. Poll the coordinator for tasks.
@@ -24,85 +25,91 @@ import (
 // 6. Write to a temporary output file, and change its name once writing is done.
 // 7. Report to coordinator that task is done.
 
-//
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-//
 // main/mrworker.go calls this function.
-//
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	for {
 
-	// Your worker implementation here.
+		reply, ok := pollGetTask()
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-	CallIsDone()
+		if !ok {
+			log.Printf("worker: could not reach coordinator, exiting")
+			return
+		}
+		if reply.Type == TaskTypeExit {
+			log.Printf("worker: got exit task, exiting")
+			return
+		}
 
-}
-
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
+		err := handleTask(reply, mapf, reducef)
+		if err != nil {
+			log.Printf("worker: error occured while handling task: %v", err.Error())
+		}
 	}
 }
 
-func CallIsDone() {
+func pollGetTask() (GetTaskReply, bool) {
 	args := GetTaskArgs{}
-	reply := GetTaskReply{}
+	const idleWait = time.Second
 
-	ok := call("Coordinator.IsDone", &args, &reply)
-	if ok {
-		fmt.Printf("Status / Task Type: %v\n", reply.Type)
-	} else {
-		fmt.Printf("Call Failed!\n")
+	for {
+		reply, ok := callGetTask(args)
+		if !ok {
+			return GetTaskReply{}, ok
+		}
+		if reply.Type == TaskTypeIdle {
+			time.Sleep(idleWait)
+		} else {
+			return reply, ok
+		}
 	}
 }
 
-//
+func handleTask(reply GetTaskReply, mapf func(string, string) []KeyValue, reducef func(string, []string) string) (err error) {
+	switch reply.Type {
+
+	case TaskTypeMap:
+		err = handleMapTask(reply.Map, mapf)
+
+	case TaskTypeReduce:
+		err = handleReduceTask(reply.Reduce, reducef)
+
+	default:
+		err = fmt.Errorf("worker: unexpected task type recieved: %v", reply.Type)
+	}
+	return
+}
+
+func handleMapTask(taskInfo *MapTaskInfo, mapf func(string, string) []KeyValue) error {
+}
+
+func handleReduceTask(taskInfo *ReduceTaskInfo, reducef func(string, []string) string) error {
+
+}
+
+func callGetTask(args GetTaskArgs) (GetTaskReply, bool) {
+	reply := GetTaskReply{}
+	ok := call("Coordinator.GetTask", &args, &reply)
+	return reply, ok
+}
+
 // send an RPC request to the coordinator, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()
