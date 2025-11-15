@@ -1,10 +1,13 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net/rpc"
+	"os"
 	"time"
 )
 
@@ -83,21 +86,102 @@ func pollGetTask() (GetTaskReply, bool) {
 }
 
 func handleTask(reply GetTaskReply, mapf func(string, string) []KeyValue, reducef func(string, []string) string) error {
+	var err error
+	args := ReportTaskDoneArgs{}
 	switch reply.Type {
 	case TaskTypeMap:
-		return handleMapTask(reply.Map, mapf)
+		err = handleMapTask(reply.Map, mapf)
+		args.Type = TaskTypeMap
+		args.ID = reply.Map.ID
+
 	case TaskTypeReduce:
-		return handleReduceTask(reply.Reduce, reducef)
+		err = handleReduceTask(reply.Reduce, reducef)
+		args.Type = TaskTypeReduce
+		args.ID = reply.Reduce.ID
+
 	default:
-		return fmt.Errorf("worker: unexpected task type recieved: %v", reply.Type)
+		err = fmt.Errorf("unexpected task type recieved: %v", reply.Type)
 	}
+
+	if err != nil {
+		return err
+	}
+
+	_, ok := callReportTaskDone(args)
+	if !ok {
+		return fmt.Errorf("error in calling report task done with args: %v", args)
+	}
+	return nil
 }
 
 func handleMapTask(taskInfo *MapTaskInfo, mapf func(string, string) []KeyValue) error {
 	if taskInfo == nil {
-		return fmt.Errorf("worker: no map task information found")
+		return fmt.Errorf("no map task information found")
 	}
-	// TODO: Implement Map
+
+	content, err := readFileContents(taskInfo.Filename)
+	if err != nil {
+		return err
+	}
+
+	kva := mapf(taskInfo.Filename, content)
+
+	buckets := make([][]KeyValue, taskInfo.NReduce)
+
+	for _, kv := range kva {
+		hash := ihash(kv.Key) % taskInfo.NReduce
+		buckets[hash] = append(buckets[hash], kv)
+	}
+
+	err = writeKeyValuesToFiles(buckets, taskInfo)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func readFileContents(filename string) (string, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return "", fmt.Errorf("cannot open %v, err: %v", filename, err)
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("cannot read %v, err: %v", filename, err)
+	}
+	return string(content), nil
+}
+
+func writeKeyValuesToFiles(buckets [][]KeyValue, taskInfo *MapTaskInfo) error {
+	for r := range taskInfo.NReduce {
+		finalName := fmt.Sprintf("mr-%d-%d", taskInfo.ID, r)
+
+		tmpFile, err := os.CreateTemp(".", "mr-tmp-*")
+		if err != nil {
+			return err
+		}
+
+		enc := json.NewEncoder(tmpFile)
+
+		for _, kv := range buckets[r] {
+			if err := enc.Encode(&kv); err != nil {
+				tmpFile.Close()
+				_ = os.Remove(tmpFile.Name())
+				return err
+			}
+		}
+
+		if err := tmpFile.Close(); err != nil {
+			_ = os.Remove(tmpFile.Name())
+			return err
+		}
+
+		if err := os.Rename(tmpFile.Name(), finalName); err != nil {
+			_ = os.Remove(tmpFile.Name())
+			return err
+		}
+	}
 	return nil
 }
 
@@ -106,12 +190,19 @@ func handleReduceTask(taskInfo *ReduceTaskInfo, reducef func(string, []string) s
 		return fmt.Errorf("worker: no reduce task information found")
 	}
 	// TODO: Implement Reduce
+	panic("handleReduceTask not yet implemented")
 	return nil
 }
 
 func callGetTask(args GetTaskArgs) (GetTaskReply, bool) {
 	reply := GetTaskReply{}
 	ok := call("Coordinator.GetTask", &args, &reply)
+	return reply, ok
+}
+
+func callReportTaskDone(args ReportTaskDoneArgs) (ReportTaskDoneReply, bool) {
+	reply := ReportTaskDoneReply{}
+	ok := call("Coordinator.ReportTaskDone", &args, &reply)
 	return reply, ok
 }
 

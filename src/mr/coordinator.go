@@ -178,11 +178,12 @@ func (c *Coordinator) ReportTaskDone(args *ReportTaskDoneArgs, reply *ReportTask
 func (c *Coordinator) markMapTaskDone(args *ReportTaskDoneArgs) error {
 	idx := args.ID
 	if c.MapTasks[idx].Status != TaskStatusCompleted {
-		c.MapTasksDone++
+		c.MapTasksDone += 1
 		if c.MapTasksDone == c.NMap {
 			c.CurrentPhase = PhaseReduce
 		}
 	}
+	log.Printf("New task done, tasks done: %d\n", c.MapTasksDone)
 	c.MapTasks[idx].Status = TaskStatusCompleted
 	return nil
 }
@@ -190,7 +191,7 @@ func (c *Coordinator) markMapTaskDone(args *ReportTaskDoneArgs) error {
 func (c *Coordinator) markReduceTaskDone(args *ReportTaskDoneArgs) error {
 	idx := args.ID
 	if c.ReduceTasks[idx].Status != TaskStatusCompleted {
-		c.ReduceTasksDone++
+		c.ReduceTasksDone += 1
 		if c.ReduceTasksDone == c.NReduce {
 			c.CurrentPhase = PhaseDone
 		}
