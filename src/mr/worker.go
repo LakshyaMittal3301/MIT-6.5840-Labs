@@ -58,8 +58,8 @@ func Worker(mapf func(string, string) []KeyValue,
 		err := handleTask(reply, mapf, reducef)
 		if err != nil {
 			log.Printf("worker: error occured while handling task: %v\n", err)
-			// Should we sleep for some time?
-			time.Sleep(time.Second * 2)
+			// time.Sleep(time.Second * 2)
+			return
 		}
 	}
 }
