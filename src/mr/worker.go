@@ -51,18 +51,18 @@ func Worker(mapf func(string, string) []KeyValue,
 		reply, ok := pollGetTask()
 
 		if !ok {
-			log.Printf("worker: could not reach coordinator, exiting\n")
+			// log.Printf("worker: could not reach coordinator, exiting\n")
 			return
 		}
 		if reply.Type == TaskTypeExit {
-			log.Printf("worker: got exit task, exiting\n")
+			// log.Printf("worker: got exit task, exiting\n")
 			return
 		}
 
 		err := handleTask(reply, mapf, reducef)
 		if err != nil {
-			log.Printf("worker: error occured while handling task: %v\n", err)
-			// time.Sleep(time.Second * 2)
+			// log.Printf("worker: error occured while handling task: %v\n, sleeping!", err)
+			time.Sleep(time.Second * 2)
 			return
 		}
 	}
@@ -70,7 +70,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 func pollGetTask() (GetTaskReply, bool) {
 	args := GetTaskArgs{}
-	const idleWait = time.Second
+	const idleWait = time.Millisecond * 100
 
 	for {
 		reply, ok := callGetTask(args)
@@ -78,7 +78,7 @@ func pollGetTask() (GetTaskReply, bool) {
 			return GetTaskReply{}, ok
 		}
 		if reply.Type == TaskTypeIdle {
-			log.Printf("worker: Idle recieved, sleeping for: %ds\n", idleWait/time.Second)
+			// log.Printf("worker: Idle recieved, sleeping for: %ds\n", idleWait/time.Second)
 			time.Sleep(idleWait)
 		} else {
 			return reply, ok
