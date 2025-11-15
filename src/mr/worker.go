@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -133,7 +134,7 @@ func handleMapTask(taskInfo *MapTaskInfo, mapf func(string, string) []KeyValue) 
 		buckets[hash] = append(buckets[hash], kv)
 	}
 
-	err = writeKeyValuesToFiles(buckets, taskInfo)
+	err = writeIntermediateKeyValueToFile(buckets, taskInfo)
 	if err != nil {
 		return err
 	}
@@ -153,7 +154,7 @@ func readFileContents(filename string) (string, error) {
 	return string(content), nil
 }
 
-func writeKeyValuesToFiles(buckets [][]KeyValue, taskInfo *MapTaskInfo) error {
+func writeIntermediateKeyValueToFile(buckets [][]KeyValue, taskInfo *MapTaskInfo) error {
 	for r := range taskInfo.NReduce {
 		finalName := fmt.Sprintf("mr-%d-%d", taskInfo.ID, r)
 
@@ -189,8 +190,93 @@ func handleReduceTask(taskInfo *ReduceTaskInfo, reducef func(string, []string) s
 	if taskInfo == nil {
 		return fmt.Errorf("worker: no reduce task information found")
 	}
-	// TODO: Implement Reduce
-	panic("handleReduceTask not yet implemented")
+	kva, err := readKeyValueFromFiles(taskInfo)
+	if err != nil {
+		return err
+	}
+
+	sort.Slice(kva, func(i, j int) bool {
+		return kva[i].Key < kva[j].Key
+	})
+
+	finalKV := []KeyValue{}
+	idx := 0
+	for idx < len(kva) {
+		key := kva[idx].Key
+		values := []string{}
+		for idx < len(kva) && kva[idx].Key == key {
+			values = append(values, kva[idx].Value)
+			idx++
+		}
+		finalValue := reducef(key, values)
+		finalKV = append(finalKV, KeyValue{
+			Key:   key,
+			Value: finalValue,
+		})
+	}
+
+	err = writeFinalKeyValueToFile(finalKV, taskInfo)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func readKeyValueFromFiles(taskInfo *ReduceTaskInfo) ([]KeyValue, error) {
+	var kva []KeyValue
+
+	for m := range taskInfo.NMaps {
+		filename := fmt.Sprintf("mr-%d-%d", m, taskInfo.ID)
+		file, err := os.Open(filename)
+		if err != nil {
+			return []KeyValue{}, err
+		}
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				if err == io.EOF {
+					break
+				}
+				file.Close()
+				return []KeyValue{}, err
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+	}
+	return kva, nil
+}
+
+func writeFinalKeyValueToFile(kva []KeyValue, taskInfo *ReduceTaskInfo) error {
+	reduceId := taskInfo.ID
+	finalName := fmt.Sprintf("mr-out-%d", reduceId)
+
+	tmpFile, err := os.CreateTemp(".", "mr-out-temp-*")
+	if err != nil {
+		return err
+	}
+
+	for _, kv := range kva {
+		_, err := fmt.Fprintf(tmpFile, "%v %v\n", kv.Key, kv.Value)
+		if err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return err
+		}
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpFile.Name())
+		return err
+	}
+
+	if err := os.Rename(tmpFile.Name(), finalName); err != nil {
+		os.Remove(tmpFile.Name())
+		return err
+	}
+
 	return nil
 }
 

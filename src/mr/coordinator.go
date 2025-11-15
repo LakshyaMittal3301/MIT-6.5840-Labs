@@ -87,7 +87,7 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	defer c.mu.Unlock()
 
 	var err error
-
+	log.Printf("GetTask, current phase: %v\n", c.CurrentPhase)
 	switch c.CurrentPhase {
 	case PhaseMap:
 		err = c.assignMapTask(reply)
@@ -183,7 +183,7 @@ func (c *Coordinator) markMapTaskDone(args *ReportTaskDoneArgs) error {
 			c.CurrentPhase = PhaseReduce
 		}
 	}
-	log.Printf("New task done, tasks done: %d\n", c.MapTasksDone)
+	log.Printf("New Map task done, tasks done: %d\n, current phase: %v", c.MapTasksDone, c.CurrentPhase)
 	c.MapTasks[idx].Status = TaskStatusCompleted
 	return nil
 }
