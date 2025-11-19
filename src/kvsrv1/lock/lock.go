@@ -1,7 +1,12 @@
 package lock
 
 import (
-	"6.5840/kvtest1"
+	"fmt"
+	"strings"
+	"time"
+
+	"6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
 )
 
 type Lock struct {
@@ -9,8 +14,11 @@ type Lock struct {
 	// the specific Clerk type of ck but promises that ck supports
 	// Put and Get.  The tester passes the clerk in when calling
 	// MakeLock().
-	ck kvtest.IKVClerk
-	// You may add code here
+	ck            kvtest.IKVClerk
+	state         bool
+	id            string
+	versionNumber rpc.Tversion
+	key           string
 }
 
 // The tester calls MakeLock() and passes in a k/v clerk; your code can
@@ -19,15 +27,90 @@ type Lock struct {
 // Use l as the key to store the "lock state" (you would have to decide
 // precisely what the lock state is).
 func MakeLock(ck kvtest.IKVClerk, l string) *Lock {
-	lk := &Lock{ck: ck}
-	// You may add code here
+	lk := &Lock{
+		ck:            ck,
+		state:         false,
+		id:            kvtest.RandValue(8),
+		versionNumber: 0,
+		key:           l,
+	}
 	return lk
 }
 
-func (lk *Lock) Acquire() {
-	// Your code here
+func getStatusAndId(value string) (bool, string) {
+	left, right, _ := strings.Cut(value, "$")
+	if left == "1" {
+		return true, right
+	}
+	return false, right
 }
 
+func makeValueFromStatusAndId(id string, status bool) (value string) {
+	if status {
+		value += "1"
+	} else {
+		value += "0"
+	}
+
+	value += "$" + id
+	return
+}
+
+// Acquire
+// If the lock is already acquired return
+// Get the keys value and version number
+// If the value is "free", try and set it to acquire using the version number received.
+//
+//	If successful, update your own state to acquired, and return
+//	If not successful loop again
+//
+// If the value is "acquired", wait 100 ms and loop
+func (lk *Lock) Acquire() {
+	if lk.state {
+		return
+	}
+	for {
+		value, version, err := lk.ck.Get(lk.key)
+		if err == rpc.ErrNoKey {
+			version = 0
+		} else {
+			acquired, id := getStatusAndId(value)
+			if acquired {
+				if id == lk.id {
+				}
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+		}
+
+		lockVal := makeValueFromStatusAndId(lk.id, true)
+		err = lk.ck.Put(lk.key, lockVal, version)
+
+		if err == rpc.ErrVersion {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		lk.state = true
+		lk.versionNumber = version + 1
+		return
+	}
+}
+
+// Release
+// If the lock is already released return
+// Put the value "free", with the version number
+// If successful, set internal state as free and return
+// If not panic (as acquired lock is now changed)/
 func (lk *Lock) Release() {
-	// Your code here
+	if !lk.state {
+		return
+	}
+	lockVal := makeValueFromStatusAndId(lk.id, false)
+	err := lk.ck.Put(lk.key, lockVal, lk.versionNumber)
+
+	if err != rpc.OK {
+		fmt.Printf("Error while releasing lock, lockVal: %s, err: %v", lockVal, err)
+	}
+	lk.state = false
 }
