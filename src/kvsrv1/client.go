@@ -36,13 +36,13 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	}
 	reply := rpc.GetReply{}
 
-	ok := false
-	for !ok || reply.Err != rpc.ErrNoKey {
-		ok = ck.clnt.Call(ck.server, "KVServer.Get", &args, &reply)
-		if reply.Err == rpc.OK {
-			return reply.Value, reply.Version, reply.Err
-		}
+	// ok := false
+	// for !ok || reply.Err != rpc.ErrNoKey {
+	_ = ck.clnt.Call(ck.server, "KVServer.Get", &args, &reply)
+	if reply.Err == rpc.OK {
+		return reply.Value, reply.Version, reply.Err
 	}
+	// }
 	return "", 0, rpc.ErrNoKey
 }
 
@@ -71,19 +71,15 @@ func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 	}
 	reply := rpc.PutReply{}
 
-	iter := 1
-	for {
-		ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
-		if !ok {
-			log.Printf("Error: Cannot connect to server")
-		} else if reply.Err == rpc.ErrVersion {
-			if iter == 1 {
-				return rpc.ErrVersion
-			} else {
-				return rpc.ErrMaybe
-			}
-		} else {
-			return rpc.OK
-		}
+	// iter := 0
+	// for {
+	// 	iter++
+
+	ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
+
+	if !ok {
+		log.Printf("Error: Cannot connect to server")
 	}
+	return reply.Err
+	// }
 }

@@ -75,6 +75,8 @@ func (kv *KVServer) Put(args *rpc.PutArgs, reply *rpc.PutReply) {
 			Value:   args.Value,
 			Version: args.Version + 1,
 		}
+	} else if valueVersion.Version == 0 {
+		reply.Err = rpc.ErrNoKey
 	} else {
 		reply.Err = rpc.ErrVersion
 	}
