@@ -70,7 +70,16 @@ func (lk *Lock) tryAcquire() bool {
 	}
 
 	lockVal := makeValueFromStatusAndId(lk.id, true)
+
 	err = lk.ck.Put(lk.key, lockVal, version)
+	if err == rpc.ErrMaybe {
+		curVal, curVersion, _ := lk.ck.Get(lk.key)
+		if curVal == lockVal && curVersion == version+1 {
+			err = rpc.OK
+		} else {
+			err = rpc.ErrVersion
+		}
+	}
 
 	if err == rpc.ErrVersion {
 		return false
@@ -101,7 +110,10 @@ func (lk *Lock) Release() {
 	err := lk.ck.Put(lk.key, lockVal, lk.versionNumber)
 
 	if err != rpc.OK {
-		fmt.Printf("Error while releasing lock, lockVal: %s, err: %v", lockVal, err)
+		curVal, curVersion, _ := lk.ck.Get(lk.key)
+		if curVersion <= lk.versionNumber {
+			fmt.Printf("Error in releasing lock, key: %s, currval: %s, currVersion: %v", lk.key, curVal, curVersion)
+		}
 	}
 	lk.state = false
 }
