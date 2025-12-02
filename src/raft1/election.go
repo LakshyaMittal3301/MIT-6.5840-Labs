@@ -54,7 +54,7 @@ func (rf *Raft) ticker() {
 	for !rf.killed() {
 		time.Sleep(TimeToSleepBetweenChecks)
 		rf.mu.Lock()
-		shouldStartElection := (rf.role != Leader) && (time.Since(rf.lastHeard) > rf.electionTimeout)
+		shouldStartElection := time.Since(rf.lastHeard) > rf.electionTimeout
 		var term int
 		if shouldStartElection {
 			term = rf.becomeCandidateLocked()
