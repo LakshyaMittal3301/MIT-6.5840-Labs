@@ -21,7 +21,8 @@ import (
 )
 
 const TimeToSleepBetweenChecks = 10 * time.Millisecond
-const TimeToRetryVotes = 100 * time.Millisecond
+const TimeToRetryRequestVotes = 100 * time.Millisecond
+const TimeToSleepBetweenAppendEntries = 100 * time.Millisecond
 
 func getRandomElectionTimeout() time.Duration {
 	return time.Duration(500+(rand.Int63()%500)) * time.Millisecond
@@ -69,12 +70,12 @@ type Raft struct {
 	log         []interface{}
 
 	// Volatile State
-	commitIndex int
-	lastApplied int
+	// commitIndex int
+	// lastApplied int
 
 	// Volatile State on leaders
-	nextIndex  []int
-	matchIndex []int
+	// nextIndex  []int
+	// matchIndex []int
 
 	// Timer
 	lastHeard       time.Time
@@ -189,6 +190,38 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 }
 
+type AppendEntriesArgs struct {
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []interface{}
+	LeaderCommit []int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if args.Term > rf.currentTerm {
+		rf.becomeFollowerLocked(args.Term)
+	}
+	reply.Term = rf.currentTerm
+
+	if args.Term < rf.currentTerm {
+		reply.Success = false
+		return
+	}
+
+	reply.Success = true
+	rf.lastHeard = time.Now()
+}
+
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
 // expects RPC arguments in args.
@@ -218,6 +251,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -315,7 +353,7 @@ func (rf *Raft) startRequestVotes(server int, term int) {
 
 		ok := rf.sendRequestVote(server, &args, &reply)
 		if !ok {
-			time.Sleep(TimeToRetryVotes)
+			time.Sleep(TimeToRetryRequestVotes)
 			continue
 		}
 
@@ -330,7 +368,10 @@ func (rf *Raft) startRequestVotes(server int, term int) {
 		} else if reply.VoteGranted {
 			rf.votesReceived += 1
 			if rf.votesReceived > len(rf.peers)/2 {
-				rf.becomeLeaderLocked()
+				term := rf.becomeLeaderLocked()
+				rf.mu.Unlock()
+				go rf.startLogReplication(term)
+				return
 			}
 		}
 		rf.mu.Unlock()
@@ -344,9 +385,51 @@ func (rf *Raft) becomeFollowerLocked(term int) {
 	rf.votedFor = -1
 	rf.votesReceived = 0
 }
-func (rf *Raft) becomeLeaderLocked() {
+func (rf *Raft) becomeLeaderLocked() int {
 	rf.role = Leader
 	rf.votesReceived = 0
+	return rf.currentTerm
+}
+
+func (rf *Raft) startLogReplication(term int) {
+	for server := range rf.peers {
+		if server == rf.me {
+			continue
+		}
+		go rf.startAppendEntries(server, term)
+	}
+}
+
+func (rf *Raft) startAppendEntries(server int, term int) {
+	for !rf.killed() {
+		rf.mu.Lock()
+		if rf.role != Leader || rf.currentTerm != term {
+			rf.mu.Unlock()
+			return
+		}
+
+		args := AppendEntriesArgs{
+			Term:     term,
+			LeaderId: rf.me,
+		}
+		reply := AppendEntriesReply{}
+		rf.mu.Unlock()
+
+		ok := rf.sendAppendEntries(server, &args, &reply)
+
+		rf.mu.Lock()
+		if rf.role != Leader || rf.currentTerm != term {
+			rf.mu.Unlock()
+			return
+		}
+		if ok && reply.Term > rf.currentTerm {
+			rf.becomeFollowerLocked(reply.Term)
+			rf.mu.Unlock()
+			return
+		}
+		rf.mu.Unlock()
+		time.Sleep(TimeToSleepBetweenAppendEntries)
+	}
 }
 
 // the service or tester wants to create a Raft server. the ports
