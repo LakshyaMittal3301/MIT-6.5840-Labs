@@ -147,49 +147,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-type RequestVoteArgs struct {
-	// Your data here (3A, 3B).
-	Term        int
-	CandidateId int
-	// LastLogIndex int
-	// LastLogTerm  int
-}
-
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
-type RequestVoteReply struct {
-	// Your data here (3A).
-	Term        int
-	VoteGranted bool
-}
-
-// example RequestVote RPC handler.
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (3A, 3B).
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if args.Term > rf.currentTerm {
-		rf.becomeFollowerLocked(args.Term)
-	}
-	reply.Term = rf.currentTerm
-
-	if args.Term < rf.currentTerm {
-		reply.VoteGranted = false
-		return
-	}
-
-	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		rf.votedFor = args.CandidateId
-		reply.VoteGranted = true
-		rf.lastHeard = time.Now()
-	} else {
-		reply.VoteGranted = false
-	}
-}
-
 type AppendEntriesArgs struct {
 	Term         int
 	LeaderId     int
@@ -220,38 +177,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Success = true
 	rf.lastHeard = time.Now()
-}
-
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -298,75 +223,6 @@ func (rf *Raft) Kill() {
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
-}
-
-func (rf *Raft) ticker() {
-	for !rf.killed() {
-		time.Sleep(TimeToSleepBetweenChecks)
-		rf.mu.Lock()
-		shouldStartElection := (rf.role != Leader) && (time.Since(rf.lastHeard) > rf.electionTimeout)
-		var term int
-		if shouldStartElection {
-			term = rf.becomeCandidateLocked()
-		}
-		rf.mu.Unlock()
-
-		if shouldStartElection {
-			go rf.startElection(term)
-		}
-	}
-}
-
-func (rf *Raft) startElection(term int) {
-	for server := range rf.peers {
-		if server == rf.me {
-			continue
-		}
-		go rf.startRequestVotes(server, term)
-	}
-}
-
-func (rf *Raft) startRequestVotes(server int, term int) {
-	for !rf.killed() {
-		rf.mu.Lock()
-		if rf.role != Candidate || rf.currentTerm != term {
-			rf.mu.Unlock()
-			return
-		}
-
-		args := RequestVoteArgs{
-			Term:        term,
-			CandidateId: rf.me,
-		}
-		reply := RequestVoteReply{}
-		rf.mu.Unlock()
-
-		ok := rf.sendRequestVote(server, &args, &reply)
-		if !ok {
-			time.Sleep(TimeToRetryRequestVotes)
-			continue
-		}
-
-		rf.mu.Lock()
-		if rf.role != Candidate || rf.currentTerm != term {
-			rf.mu.Unlock()
-			return
-		}
-
-		if rf.currentTerm < reply.Term {
-			rf.becomeFollowerLocked(reply.Term)
-		} else if reply.VoteGranted {
-			rf.votesReceived += 1
-			if rf.votesReceived > len(rf.peers)/2 {
-				term := rf.becomeLeaderLocked()
-				rf.mu.Unlock()
-				go rf.startLogReplication(term)
-				return
-			}
-		}
-		rf.mu.Unlock()
-		return
-	}
 }
 
 func (rf *Raft) startLogReplication(term int) {
