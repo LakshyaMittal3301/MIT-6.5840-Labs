@@ -317,16 +317,6 @@ func (rf *Raft) ticker() {
 	}
 }
 
-func (rf *Raft) becomeCandidateLocked() int {
-	rf.role = Candidate
-	rf.currentTerm += 1
-	rf.votedFor = rf.me
-	rf.votesReceived = 1
-	rf.lastHeard = time.Now()
-	rf.electionTimeout = getRandomElectionTimeout()
-	return rf.currentTerm
-}
-
 func (rf *Raft) startElection(term int) {
 	for server := range rf.peers {
 		if server == rf.me {
@@ -377,18 +367,6 @@ func (rf *Raft) startRequestVotes(server int, term int) {
 		rf.mu.Unlock()
 		return
 	}
-}
-
-func (rf *Raft) becomeFollowerLocked(term int) {
-	rf.currentTerm = term
-	rf.role = Follower
-	rf.votedFor = -1
-	rf.votesReceived = 0
-}
-func (rf *Raft) becomeLeaderLocked() int {
-	rf.role = Leader
-	rf.votesReceived = 0
-	return rf.currentTerm
 }
 
 func (rf *Raft) startLogReplication(term int) {
