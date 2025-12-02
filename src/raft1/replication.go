@@ -21,17 +21,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 
 	if args.Term > rf.currentTerm {
+		Debug(dTerm, "S%d sees higher term in AE from S%d: %d > %d",
+			rf.me, args.LeaderId, args.Term, rf.currentTerm)
 		rf.becomeFollowerLocked(args.Term)
 	}
 	reply.Term = rf.currentTerm
 
 	if args.Term < rf.currentTerm {
+		Debug(dLog1, "S%d rejects AE from S%d (stale term %d < %d)",
+			rf.me, args.LeaderId, args.Term, rf.currentTerm)
 		reply.Success = false
 		return
 	}
 
 	reply.Success = true
 	rf.lastHeard = time.Now()
+	Debug(dTimer, "S%d got heartbeat from S%d at T%d",
+		rf.me, args.LeaderId, args.Term)
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -61,6 +67,7 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 			LeaderId: rf.me,
 		}
 		reply := AppendEntriesReply{}
+		Debug(dLog1, "S%d -> S%d sending AE heartbeat T%d", rf.me, server, term)
 		rf.mu.Unlock()
 
 		ok := rf.sendAppendEntries(server, &args, &reply)
@@ -71,6 +78,8 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 			return
 		}
 		if ok && reply.Term > rf.currentTerm {
+			Debug(dTerm, "S%d sees higher term in AE reply from S%d: %d > %d",
+				rf.me, server, reply.Term, rf.currentTerm)
 			rf.becomeFollowerLocked(reply.Term)
 			rf.mu.Unlock()
 			return
