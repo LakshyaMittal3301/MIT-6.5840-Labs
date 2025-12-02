@@ -147,43 +147,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-type AppendEntriesArgs struct {
-	Term         int
-	LeaderId     int
-	PrevLogIndex int
-	PrevLogTerm  int
-	Entries      []interface{}
-	LeaderCommit []int
-}
-
-type AppendEntriesReply struct {
-	Term    int
-	Success bool
-}
-
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if args.Term > rf.currentTerm {
-		rf.becomeFollowerLocked(args.Term)
-	}
-	reply.Term = rf.currentTerm
-
-	if args.Term < rf.currentTerm {
-		reply.Success = false
-		return
-	}
-
-	reply.Success = true
-	rf.lastHeard = time.Now()
-}
-
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
-}
-
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -223,47 +186,6 @@ func (rf *Raft) Kill() {
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
-}
-
-func (rf *Raft) startLogReplication(term int) {
-	for server := range rf.peers {
-		if server == rf.me {
-			continue
-		}
-		go rf.startAppendEntries(server, term)
-	}
-}
-
-func (rf *Raft) startAppendEntries(server int, term int) {
-	for !rf.killed() {
-		rf.mu.Lock()
-		if rf.role != Leader || rf.currentTerm != term {
-			rf.mu.Unlock()
-			return
-		}
-
-		args := AppendEntriesArgs{
-			Term:     term,
-			LeaderId: rf.me,
-		}
-		reply := AppendEntriesReply{}
-		rf.mu.Unlock()
-
-		ok := rf.sendAppendEntries(server, &args, &reply)
-
-		rf.mu.Lock()
-		if rf.role != Leader || rf.currentTerm != term {
-			rf.mu.Unlock()
-			return
-		}
-		if ok && reply.Term > rf.currentTerm {
-			rf.becomeFollowerLocked(reply.Term)
-			rf.mu.Unlock()
-			return
-		}
-		rf.mu.Unlock()
-		time.Sleep(TimeToSleepBetweenAppendEntries)
-	}
 }
 
 // the service or tester wants to create a Raft server. the ports
