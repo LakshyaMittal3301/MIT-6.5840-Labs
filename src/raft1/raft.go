@@ -8,6 +8,7 @@ package raft
 
 import (
 	//	"bytes"
+
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -16,9 +17,36 @@ import (
 	//	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raftapi"
-	"6.5840/tester1"
+	tester "6.5840/tester1"
 )
 
+const TimeToSleepBetweenChecks = 10 * time.Millisecond
+const TimeToRetryVotes = 100 * time.Millisecond
+
+func getRandomElectionTimeout() time.Duration {
+	return time.Duration(500+(rand.Int63()%500)) * time.Millisecond
+}
+
+type Role int
+
+const (
+	Follower Role = iota
+	Candidate
+	Leader
+)
+
+func (r Role) String() string {
+	switch r {
+	case Follower:
+		return "Follower"
+	case Candidate:
+		return "Candidate"
+	case Leader:
+		return "Leader"
+	default:
+		return "Unknown"
+	}
+}
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
@@ -32,16 +60,36 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// Current Role
+	role Role
+
+	// Persistent State
+	currentTerm int
+	votedFor    int
+	log         []interface{}
+
+	// Volatile State
+	commitIndex int
+	lastApplied int
+
+	// Volatile State on leaders
+	nextIndex  []int
+	matchIndex []int
+
+	// Timer
+	lastHeard       time.Time
+	electionTimeout time.Duration
+
+	// Candidate State
+	votesReceived int
 }
 
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
-	// Your code here (3A).
-	return term, isleader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.currentTerm, rf.role == Leader
 }
 
 // save Raft's persistent state to stable storage,
@@ -61,7 +109,6 @@ func (rf *Raft) persist() {
 	// raftstate := w.Bytes()
 	// rf.persister.Save(raftstate, nil)
 }
-
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
@@ -90,7 +137,6 @@ func (rf *Raft) PersistBytes() int {
 	return rf.persister.RaftStateSize()
 }
 
-
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
@@ -100,22 +146,47 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (3A, 3B).
+	Term        int
+	CandidateId int
+	// LastLogIndex int
+	// LastLogTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (3A).
+	Term        int
+	VoteGranted bool
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (3A, 3B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if args.Term > rf.currentTerm {
+		rf.becomeFollowerLocked(args.Term)
+	}
+	reply.Term = rf.currentTerm
+
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
+		return
+	}
+
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+		rf.lastHeard = time.Now()
+	} else {
+		reply.VoteGranted = false
+	}
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -150,7 +221,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -169,7 +239,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (3B).
-
 
 	return index, term, isLeader
 }
@@ -194,17 +263,90 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed() {
+		time.Sleep(TimeToSleepBetweenChecks)
+		rf.mu.Lock()
+		shouldStartElection := (rf.role != Leader) && (time.Since(rf.lastHeard) > rf.electionTimeout)
+		var term int
+		if shouldStartElection {
+			term = rf.becomeCandidateLocked()
+		}
+		rf.mu.Unlock()
 
-		// Your code here (3A)
-		// Check if a leader election should be started.
-
-
-		// pause for a random amount of time between 50 and 350
-		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
-		time.Sleep(time.Duration(ms) * time.Millisecond)
+		if shouldStartElection {
+			go rf.startElection(term)
+		}
 	}
+}
+
+func (rf *Raft) becomeCandidateLocked() int {
+	rf.role = Candidate
+	rf.currentTerm += 1
+	rf.votedFor = rf.me
+	rf.votesReceived = 1
+	rf.lastHeard = time.Now()
+	rf.electionTimeout = getRandomElectionTimeout()
+	return rf.currentTerm
+}
+
+func (rf *Raft) startElection(term int) {
+	for server := range rf.peers {
+		if server == rf.me {
+			continue
+		}
+		go rf.startRequestVotes(server, term)
+	}
+}
+
+func (rf *Raft) startRequestVotes(server int, term int) {
+	for !rf.killed() {
+		rf.mu.Lock()
+		if rf.role != Candidate || rf.currentTerm != term {
+			rf.mu.Unlock()
+			return
+		}
+
+		args := RequestVoteArgs{
+			Term:        term,
+			CandidateId: rf.me,
+		}
+		reply := RequestVoteReply{}
+		rf.mu.Unlock()
+
+		ok := rf.sendRequestVote(server, &args, &reply)
+		if !ok {
+			time.Sleep(TimeToRetryVotes)
+			continue
+		}
+
+		rf.mu.Lock()
+		if rf.role != Candidate || rf.currentTerm != term {
+			rf.mu.Unlock()
+			return
+		}
+
+		if rf.currentTerm < reply.Term {
+			rf.becomeFollowerLocked(reply.Term)
+		} else if reply.VoteGranted {
+			rf.votesReceived += 1
+			if rf.votesReceived > len(rf.peers)/2 {
+				rf.becomeLeaderLocked()
+			}
+		}
+		rf.mu.Unlock()
+		return
+	}
+}
+
+func (rf *Raft) becomeFollowerLocked(term int) {
+	rf.currentTerm = term
+	rf.role = Follower
+	rf.votedFor = -1
+	rf.votesReceived = 0
+}
+func (rf *Raft) becomeLeaderLocked() {
+	rf.role = Leader
+	rf.votesReceived = 0
 }
 
 // the service or tester wants to create a Raft server. the ports
@@ -224,13 +366,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (3A, 3B, 3C).
+	rf.currentTerm = 0
+	rf.role = Follower
+	rf.lastHeard = time.Now()
+	rf.electionTimeout = getRandomElectionTimeout()
+	rf.votedFor = -1
+	rf.votesReceived = 0
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
 
 	return rf
 }
