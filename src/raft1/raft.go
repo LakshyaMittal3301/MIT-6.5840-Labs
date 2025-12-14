@@ -22,7 +22,7 @@ import (
 
 const TimeToSleepBetweenChecks = 10 * time.Millisecond
 const TimeToRetryRequestVotes = 100 * time.Millisecond
-const TimeToSleepBetweenAppendEntries = 100 * time.Millisecond
+const TimeToHeartBeat = 100 * time.Millisecond
 
 func getRandomElectionTimeout() time.Duration {
 	return time.Duration(500+(rand.Int63()%500)) * time.Millisecond
@@ -49,6 +49,11 @@ func (r Role) String() string {
 	}
 }
 
+type LogEntry struct {
+	term    int
+	command interface{}
+}
+
 // A Go object implementing a single Raft peer.
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
@@ -67,7 +72,7 @@ type Raft struct {
 	// Persistent State
 	currentTerm int
 	votedFor    int
-	log         []interface{}
+	log         []LogEntry
 
 	// Volatile State
 	commitIndex int
@@ -76,6 +81,7 @@ type Raft struct {
 	// Volatile State on leaders
 	nextIndex  []int
 	matchIndex []int
+	lastSent   []time.Time
 
 	// Timer
 	lastHeard       time.Time
@@ -170,7 +176,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, false
 	}
 	index = len(rf.log)
-	rf.log = append(rf.log, command)
+	rf.log = append(rf.log, LogEntry{
+		term:    rf.currentTerm,
+		command: command,
+	})
 	term = rf.currentTerm
 	return index, term, true
 }
@@ -211,10 +220,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (3A, 3B, 3C).
-	// Persistent: read from disk
+	// TODO: Make persistent, read from disk
 	rf.currentTerm = 0
 	rf.votedFor = -1
-	rf.log = make([]interface{}, 1)
+	rf.log = make([]LogEntry, 1)
 
 	rf.role = Follower
 	rf.lastHeard = time.Now()
@@ -222,12 +231,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votesReceived = 0
 	rf.commitIndex = 0
 	rf.lastApplied = 0
-	n := len(peers)
-	rf.matchIndex = make([]int, n)
-	rf.nextIndex = make([]int, n)
-	for idx := range rf.nextIndex {
-		rf.nextIndex[idx] = len(rf.log)
-	}
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())

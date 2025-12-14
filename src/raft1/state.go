@@ -35,6 +35,17 @@ func (rf *Raft) becomeLeaderLocked() int {
 
 	rf.role = Leader
 	rf.votesReceived = 0
+	n := len(rf.peers)
+	rf.matchIndex = make([]int, n)
+	rf.nextIndex = make([]int, n)
+	rf.lastSent = make([]time.Time, n)
+
+	lastIndex := len(rf.log) - 1
+	now := time.Now()
+	for idx := range n {
+		rf.nextIndex[idx] = lastIndex + 1
+		rf.lastSent[idx] = now
+	}
 	Debug(dLeader, "S%d -> LEADER T%d (from %v)", rf.me, rf.currentTerm, prevRole)
 
 	return rf.currentTerm
