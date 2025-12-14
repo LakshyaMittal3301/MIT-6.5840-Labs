@@ -70,12 +70,12 @@ type Raft struct {
 	log         []interface{}
 
 	// Volatile State
-	// commitIndex int
-	// lastApplied int
+	commitIndex int
+	lastApplied int
 
 	// Volatile State on leaders
-	// nextIndex  []int
-	// matchIndex []int
+	nextIndex  []int
+	matchIndex []int
 
 	// Timer
 	lastHeard       time.Time
@@ -162,11 +162,17 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
 
 	// Your code here (3B).
-
-	return index, term, isLeader
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.killed() || rf.role != Leader {
+		return index, term, false
+	}
+	index = len(rf.log)
+	rf.log = append(rf.log, command)
+	term = rf.currentTerm
+	return index, term, true
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -205,12 +211,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (3A, 3B, 3C).
+	// Persistent: read from disk
 	rf.currentTerm = 0
+	rf.votedFor = -1
+	rf.log = make([]interface{}, 1)
+
 	rf.role = Follower
 	rf.lastHeard = time.Now()
 	rf.electionTimeout = getRandomElectionTimeout()
-	rf.votedFor = -1
 	rf.votesReceived = 0
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	n := len(peers)
+	rf.matchIndex = make([]int, n)
+	rf.nextIndex = make([]int, n)
+	for idx := range rf.nextIndex {
+		rf.nextIndex[idx] = len(rf.log)
+	}
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
