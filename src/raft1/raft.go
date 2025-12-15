@@ -50,8 +50,8 @@ func (r Role) String() string {
 }
 
 type LogEntry struct {
-	term    int
-	command interface{}
+	Term    int
+	Command interface{}
 }
 
 // A Go object implementing a single Raft peer.
@@ -89,6 +89,10 @@ type Raft struct {
 
 	// Candidate State
 	votesReceived int
+
+	// Apply
+	applyCh   chan raftapi.ApplyMsg
+	applyCond *sync.Cond
 }
 
 // return currentTerm and whether this server
@@ -172,16 +176,51 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// Your code here (3B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if rf.killed() || rf.role != Leader {
 		return index, term, false
 	}
+
 	index = len(rf.log)
 	rf.log = append(rf.log, LogEntry{
-		term:    rf.currentTerm,
-		command: command,
+		Term:    rf.currentTerm,
+		Command: command,
 	})
 	term = rf.currentTerm
+	rf.matchIndex[rf.me] = index
+	rf.nextIndex[rf.me] = index + 1
 	return index, term, true
+}
+
+func (rf *Raft) applier() {
+	for !rf.killed() {
+		rf.mu.Lock()
+		for !rf.killed() && rf.lastApplied >= rf.commitIndex {
+			rf.applyCond.Wait()
+		}
+		if rf.killed() {
+			rf.mu.Unlock()
+			return
+		}
+
+		start := rf.lastApplied + 1
+		end := rf.commitIndex
+		msgs := make([]raftapi.ApplyMsg, 0, end-start+1)
+		for i := start; i <= end; i++ {
+			entry := rf.log[i] // safe because under lock
+			msgs = append(msgs, raftapi.ApplyMsg{
+				CommandValid: true,
+				Command:      entry.Command,
+				CommandIndex: i,
+			})
+		}
+		rf.lastApplied = end
+		rf.mu.Unlock()
+
+		for _, m := range msgs {
+			rf.applyCh <- m
+		}
+	}
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -225,6 +264,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 	rf.log = make([]LogEntry, 1)
 
+	rf.applyCh = applyCh
+	rf.applyCond = sync.NewCond(&rf.mu)
+
 	rf.role = Follower
 	rf.lastHeard = time.Now()
 	rf.electionTimeout = getRandomElectionTimeout()
@@ -237,6 +279,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.applier()
 
 	return rf
 }

@@ -3,10 +3,10 @@ package raft
 import "time"
 
 type RequestVoteArgs struct {
-	Term        int
-	CandidateId int
-	// LastLogIndex int
-	// LastLogTerm  int
+	Term         int
+	CandidateId  int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 type RequestVoteReply struct {
@@ -32,7 +32,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) && (rf.isLogUpToDate(args.LastLogIndex, args.LastLogTerm)) {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
 		rf.lastHeard = time.Now()
@@ -86,10 +86,13 @@ func (rf *Raft) startRequestVotes(server int, term int) {
 			rf.mu.Unlock()
 			return
 		}
-
+		lastLogIndex := len(rf.log) - 1
+		lastLogTerm := rf.log[lastLogIndex].Term
 		args := RequestVoteArgs{
-			Term:        term,
-			CandidateId: rf.me,
+			Term:         term,
+			CandidateId:  rf.me,
+			LastLogIndex: lastLogIndex,
+			LastLogTerm:  lastLogTerm,
 		}
 		reply := RequestVoteReply{}
 		Debug(dVote, "S%d -> S%d sending RequestVote T%d", rf.me, server, term)
@@ -127,4 +130,13 @@ func (rf *Raft) startRequestVotes(server int, term int) {
 		rf.mu.Unlock()
 		return
 	}
+}
+
+func (rf *Raft) isLogUpToDate(index, term int) bool {
+	lastIndex := len(rf.log) - 1
+	lastTerm := rf.log[lastIndex].Term
+	if lastTerm != term {
+		return lastTerm < term
+	}
+	return lastIndex <= index
 }

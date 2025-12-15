@@ -1,6 +1,9 @@
 package raft
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 type AppendEntriesArgs struct {
 	Term         int
@@ -36,6 +39,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	if args.Term == rf.currentTerm && rf.role != Follower {
+		rf.role = Follower
+	}
+
 	rf.lastHeard = time.Now()
 	Debug(dTimer, "S%d got AE from S%d at T%d",
 		rf.me, args.LeaderId, args.Term)
@@ -43,15 +50,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	lastLogIndex := len(rf.log) - 1
 	if lastLogIndex < args.PrevLogIndex {
 		reply.Success = false
-		reply.FirstIndex = lastLogIndex
-		reply.ConflictingTerm = rf.log[lastLogIndex].term
+		reply.FirstIndex = lastLogIndex + 1
+		reply.ConflictingTerm = -1
 		return
 	}
 
-	if rf.log[args.PrevLogIndex].term != args.PrevLogTerm {
-		conflictingTerm := rf.log[args.PrevLogIndex].term
+	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		conflictingTerm := rf.log[args.PrevLogIndex].Term
 		currIdx := args.PrevLogIndex
-		for currIdx-1 >= 0 && rf.log[currIdx-1].term == conflictingTerm {
+		for currIdx-1 >= 0 && rf.log[currIdx-1].Term == conflictingTerm {
 			currIdx -= 1
 		}
 		reply.Success = false
@@ -60,15 +67,26 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
-	reply.Success = true
-	i := 0
-	idx := args.PrevLogIndex + i + 1
-	for idx < len(rf.log) && i < len(args.Entries) && rf.log[idx].term == args.Entries[i].term {
-		i++
-		idx++
+	idx := args.PrevLogIndex + 1
+
+	for i := range args.Entries {
+		if idx+i >= len(rf.log) {
+			rf.log = append(rf.log, args.Entries[i:]...)
+			break
+		} else if rf.log[idx+i].Term != args.Entries[i].Term {
+			rf.log = rf.log[:idx+i]
+			rf.log = append(rf.log, args.Entries[i:]...)
+			break
+		}
 	}
-	rf.log = rf.log[:idx]
-	rf.log = append(rf.log, args.Entries[i:]...)
+
+	newCommit := min(args.LeaderCommit, len(rf.log)-1)
+	if newCommit > rf.commitIndex {
+		rf.commitIndex = newCommit
+		rf.applyCond.Signal()
+	}
+
+	reply.Success = true
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -110,7 +128,7 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 			return
 		}
 		prevLogIndex := rf.nextIndex[server] - 1
-		prevLogTerm := rf.log[prevLogIndex].term
+		prevLogTerm := rf.log[prevLogIndex].Term
 
 		// Sending entire log suffic
 		// TODO: Cap with K entries later
@@ -129,6 +147,7 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 		reply := AppendEntriesReply{}
 		Debug(dLog1, "S%d -> S%d sending AE T%d", rf.me, server, term)
 
+		rf.lastSent[server] = time.Now()
 		rf.mu.Unlock()
 
 		ok := rf.sendAppendEntries(server, &args, &reply)
@@ -140,10 +159,10 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 		}
 		if !ok {
 			rf.mu.Unlock()
+			time.Sleep(TimeToSleepBetweenChecks)
 			continue
 		}
 
-		rf.lastSent[server] = time.Now()
 		if reply.Term > rf.currentTerm {
 			Debug(dTerm, "S%d sees higher term in AE reply from S%d: %d > %d",
 				rf.me, server, reply.Term, rf.currentTerm)
@@ -152,6 +171,37 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 			return
 		}
 
+		if !reply.Success {
+			// backoff nextIndex
+			rf.backoffNextIndex(server, reply.ConflictingTerm, reply.FirstIndex)
+		} else {
+			// update matchindex and commitindex
+			rf.matchIndex[server] = prevLogIndex + len(entries)
+			rf.nextIndex[server] = rf.matchIndex[server] + 1
+			rf.updateCommitIndex()
+		}
+
 		rf.mu.Unlock()
+	}
+}
+
+func (rf *Raft) backoffNextIndex(server, conflictingTerm, firstIndex int) {
+	rf.nextIndex[server]--
+}
+
+func (rf *Raft) updateCommitIndex() {
+	n := len(rf.matchIndex)
+	matchIdxs := make([]int, n)
+	copy(matchIdxs, rf.matchIndex)
+
+	sort.Slice(matchIdxs, func(i, j int) bool {
+		return matchIdxs[i] < matchIdxs[j]
+	})
+
+	maxMajorityIdx := matchIdxs[n/2]
+	for i := rf.commitIndex + 1; i <= maxMajorityIdx; i++ {
+		if rf.log[i].Term == rf.currentTerm {
+			rf.commitIndex = i
+		}
 	}
 }

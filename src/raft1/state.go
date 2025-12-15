@@ -46,6 +46,8 @@ func (rf *Raft) becomeLeaderLocked() int {
 		rf.nextIndex[idx] = lastIndex + 1
 		rf.lastSent[idx] = now
 	}
+	rf.matchIndex[rf.me] = lastIndex
+	rf.nextIndex[rf.me] = lastIndex + 1
 	Debug(dLeader, "S%d -> LEADER T%d (from %v)", rf.me, rf.currentTerm, prevRole)
 
 	return rf.currentTerm
