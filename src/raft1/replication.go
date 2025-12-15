@@ -186,7 +186,37 @@ func (rf *Raft) startAppendEntries(server int, term int) {
 }
 
 func (rf *Raft) backoffNextIndex(server, conflictingTerm, firstIndex int) {
-	rf.nextIndex[server]--
+	if conflictingTerm == -1 {
+		if firstIndex < 1 {
+			rf.nextIndex[server] = 1
+		} else {
+			rf.nextIndex[server] = firstIndex
+		}
+		return
+	}
+
+	// If we have entries with the conflicting term, skip all of them.
+	lastIdxWithTerm := -1
+	for i := len(rf.log) - 1; i >= 0; i-- {
+		if rf.log[i].Term == conflictingTerm {
+			lastIdxWithTerm = i
+			break
+		}
+		if rf.log[i].Term < conflictingTerm {
+			// Since we scan backwards, once we see a smaller term we
+			// know we don't have the conflicting term.
+			break
+		}
+	}
+
+	if lastIdxWithTerm != -1 {
+		rf.nextIndex[server] = lastIdxWithTerm + 1
+	} else {
+		rf.nextIndex[server] = firstIndex
+	}
+	if rf.nextIndex[server] < 1 {
+		rf.nextIndex[server] = 1
+	}
 }
 
 func (rf *Raft) updateCommitIndex() {
