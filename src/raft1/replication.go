@@ -202,6 +202,7 @@ func (rf *Raft) updateCommitIndex() {
 	for i := rf.commitIndex + 1; i <= maxMajorityIdx; i++ {
 		if rf.log[i].Term == rf.currentTerm {
 			rf.commitIndex = i
+			rf.applyCond.Signal()
 		}
 	}
 }
